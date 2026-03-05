@@ -13,6 +13,7 @@
 name: Security Scan Pipeline
 
 on:
+  workflow_dispatch:       # Allow manual triggering
   push:
     branches:
       - main
