@@ -1,0 +1,181 @@
+# =============================================================================
+# GitHub Actions Workflow — Microsoft Security DevOps Scanning
+# =============================================================================
+# This workflow runs Microsoft Security DevOps tools to detect:
+# - Infrastructure-as-Code misconfigurations (Bicep, Terraform, ARM)
+# - Container image vulnerabilities
+# - Secret exposure in code
+# - Dependency vulnerabilities
+#
+# Used for Demo 2: Defender for DevOps (Persona: Maria, DevOps Engineer)
+# =============================================================================
+
+name: Security Scan Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - 'feature/**'
+    paths:
+      - 'devops/**'
+      - 'infra/**'
+      - '.github/workflows/**'
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  security-events: write   # Required for uploading SARIF to GitHub Advanced Security
+
+jobs:
+  # ===========================================================================
+  # Job 1: Microsoft Security DevOps (IaC, secrets, code)
+  # ===========================================================================
+  microsoft-security-devops:
+    name: Microsoft Security DevOps
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------
+      # Microsoft Security DevOps — runs all security analyzers
+      # Includes: Trivy, Template Analyzer, Terrascan, Bandit, ESLint, etc.
+      # -----------------------------------------------------------------
+      - name: Run Microsoft Security DevOps
+        uses: microsoft/security-devops-action@v1
+        id: msdo
+        with:
+          categories: 'IaC,secrets,code'
+          # break: true   # Uncomment to FAIL the build on findings
+
+      # -----------------------------------------------------------------
+      # Upload SARIF results to GitHub Advanced Security (Code Scanning)
+      # -----------------------------------------------------------------
+      - name: Upload SARIF to GitHub Advanced Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: ${{ steps.msdo.outputs.sarifFile }}
+
+      # -----------------------------------------------------------------
+      # Upload results as workflow artifact
+      # -----------------------------------------------------------------
+      - name: Upload scan results artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: SecurityScanResults
+          path: ${{ steps.msdo.outputs.sarifFile }}
+
+  # ===========================================================================
+  # Job 2: Container Image Scanning with Trivy
+  # ===========================================================================
+  container-scan:
+    name: Container Image Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build container image
+        run: |
+          docker build -t demo-app:${{ github.run_id }} -t demo-app:latest devops/
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'demo-app:${{ github.run_id }}'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'HIGH,CRITICAL'
+
+      - name: Upload Trivy SARIF to GitHub Advanced Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-container
+
+      - name: Upload Trivy results artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: TrivyResults
+          path: trivy-results.sarif
+
+  # ===========================================================================
+  # Job 3: Dependency Review (on PRs only)
+  # ===========================================================================
+  dependency-review:
+    name: Dependency Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: critical
+
+  # ===========================================================================
+  # Job 4: Build & Push (only after security scan)
+  # ===========================================================================
+  build-and-push:
+    name: Build and Push to ACR
+    runs-on: ubuntu-latest
+    needs: [microsoft-security-devops, container-scan]
+    # if: success()   # Uncomment to require clean security scan
+    environment: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Login to ACR
+        run: |
+          az acr login --name ${{ vars.ACR_NAME }}
+
+      - name: Build and push image
+        run: |
+          docker build -t ${{ vars.ACR_NAME }}.azurecr.io/demo-app:${{ github.run_id }} \
+                        -t ${{ vars.ACR_NAME }}.azurecr.io/demo-app:latest \
+                        devops/
+          docker push ${{ vars.ACR_NAME }}.azurecr.io/demo-app:${{ github.run_id }}
+          docker push ${{ vars.ACR_NAME }}.azurecr.io/demo-app:latest
+
+  # ===========================================================================
+  # Job 5: Deploy to AKS (manual approval via environment protection)
+  # ===========================================================================
+  deploy:
+    name: Deploy to AKS
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    environment: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v4
+        with:
+          resource-group: ${{ vars.RESOURCE_GROUP }}
+          cluster-name: ${{ vars.AKS_CLUSTER_NAME }}
+
+      - name: Deploy to AKS
+        run: |
+          echo "Deploying to AKS cluster..."
+          # kubectl apply -f k8s/deployment.yaml
