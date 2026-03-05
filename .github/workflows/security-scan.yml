@@ -133,7 +133,7 @@ jobs:
     name: Build and Push to ACR
     runs-on: ubuntu-latest
     needs: [microsoft-security-devops, container-scan]
-    # if: success()   # Uncomment to require clean security scan
+    continue-on-error: true          # Don't fail the pipeline if Azure creds aren't configured
     environment: production
     steps:
       - name: Checkout code
@@ -163,6 +163,8 @@ jobs:
     name: Deploy to AKS
     runs-on: ubuntu-latest
     needs: build-and-push
+    if: ${{ !failure() }}             # Skip if build-and-push failed
+    continue-on-error: true          # Don't fail the pipeline
     environment: production
     steps:
       - name: Checkout code
