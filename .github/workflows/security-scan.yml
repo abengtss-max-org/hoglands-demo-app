@@ -18,8 +18,9 @@ on:
       - main
       - 'feature/**'
     paths:
-      - 'devops/**'
+      - 'app/**'
       - 'infra/**'
+      - 'Dockerfile'
       - '.github/workflows/**'
   pull_request:
     branches:
@@ -27,7 +28,9 @@ on:
 
 permissions:
   contents: read
+  actions: read            # Required for codeql-action SARIF upload
   security-events: write   # Required for uploading SARIF to GitHub Advanced Security
+  id-token: write          # Required for Defender for Cloud integration
 
 jobs:
   # ===========================================================================
@@ -55,7 +58,7 @@ jobs:
       # Upload SARIF results to GitHub Advanced Security (Code Scanning)
       # -----------------------------------------------------------------
       - name: Upload SARIF to GitHub Advanced Security
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: ${{ steps.msdo.outputs.sarifFile }}
@@ -82,7 +85,7 @@ jobs:
 
       - name: Build container image
         run: |
-          docker build -t demo-app:${{ github.run_id }} -t demo-app:latest devops/
+          docker build -t demo-app:${{ github.run_id }} -t demo-app:latest .
 
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
@@ -93,7 +96,7 @@ jobs:
           severity: 'HIGH,CRITICAL'
 
       - name: Upload Trivy SARIF to GitHub Advanced Security
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: trivy-results.sarif
@@ -148,7 +151,7 @@ jobs:
         run: |
           docker build -t ${{ vars.ACR_NAME }}.azurecr.io/demo-app:${{ github.run_id }} \
                         -t ${{ vars.ACR_NAME }}.azurecr.io/demo-app:latest \
-                        devops/
+                        .
           docker push ${{ vars.ACR_NAME }}.azurecr.io/demo-app:${{ github.run_id }}
           docker push ${{ vars.ACR_NAME }}.azurecr.io/demo-app:latest
 
