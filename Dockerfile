@@ -6,7 +6,7 @@
 # =============================================================================
 
 # ISSUE 1: Using an old base image with known CVEs
-FROM node:16-alpine
+FROM node:25-alpine
 
 # ISSUE 2: Running as root (no USER directive until too late)
 # ISSUE 3: Installing unnecessary packages
